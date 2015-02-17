@@ -1,21 +1,35 @@
 package com.example.egardening.egardening;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Paint;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.os.StrictMode;
+import android.util.Base64;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.widget.EditText;
-import android.widget.Toast;
-import android.widget.Button;
 import android.view.View;
 import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.facebook.Request;
+import com.facebook.Response;
+import com.facebook.Session;
+import com.facebook.SessionState;
+import com.facebook.UiLifecycleHelper;
+import com.facebook.android.Facebook;
+import com.facebook.model.GraphUser;
+import com.facebook.widget.LoginButton;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
@@ -31,28 +45,76 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 
 
 public class Login extends Activity implements OnClickListener {
 
-    EditText et_pass, et_username;
-    Button btn_login;
+    EditText et_pass, et_username, et_signup_username, et_signup_email, et_signup_pass;
+    Button btn_login, btn_cancel;
+    TextView txt_register;
     String username, password;
+    ArrayList<NameValuePair> nvps;
+    HttpClient http_client;
+    HttpPost http_post;
+    HttpResponse response;
 
-
-    //HttpEntity entity;
+    //Ayman 15/02/15 Facebook login variables
+    Facebook fb; // Facebook object
+    private UiLifecycleHelper uihelper;
+    String new_username = null;
+    String new_email = null;
+    String new_password = "";
+    //End Ayman
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.login);
 
-        btn_login = (Button) findViewById(R.id.button);
+        btn_login = (Button) findViewById(R.id.button_login);
+        btn_cancel = (Button) findViewById(R.id.button_cancel);
         et_username = (EditText) findViewById(R.id.editText);
         et_pass = (EditText) findViewById(R.id.editText2);
+        txt_register = (TextView) findViewById(R.id.link_register);
+        txt_register.setPaintFlags(txt_register.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG );
+
 
         btn_login.setOnClickListener(this);
+        btn_cancel.setOnClickListener(this);
+        txt_register.setOnClickListener(this);
+
+
+
+        //Ayman 15/02/15 Facebook login
+        uihelper = new UiLifecycleHelper(this,callback);
+        uihelper.onCreate(savedInstanceState);
+
+        ArrayList<String> permission = new ArrayList<String>();
+        permission.add("email");
+        permission.add("public_profile");
+        permission.add("user_friends");
+
+        LoginButton btn_fb_login = (LoginButton) findViewById(R.id.button_fb_login);
+        //btn_fb_login.setPublishPermissions(permission);
+        btn_fb_login.setReadPermissions(permission);
+
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(
+                    "com.example.egardening.egardening",
+                    PackageManager.GET_SIGNATURES);
+            for (android.content.pm.Signature signature : info.signatures) {
+                MessageDigest md = MessageDigest.getInstance("SHA");
+                md.update(signature.toByteArray());
+                Log.d("KeyHash:", Base64.encodeToString(md.digest(), Base64.DEFAULT));
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+        //End Ayman
 
     }
 
@@ -62,10 +124,21 @@ public class Login extends Activity implements OnClickListener {
     public void onClick(View v) {
 
         switch (v.getId()) {
-            case R.id.button:
-                new NetworkConnection().execute();
+            case R.id.button_login:
                 username = et_username.getText().toString();
                 password = et_pass.getText().toString();
+                new LoginTask().execute();
+                break;
+
+            case R.id.button_cancel:
+                et_username.setText("");
+                et_pass.setText("");
+                break;
+
+            case R.id.link_register:
+                Intent intent = new Intent(Login.this, SignUp.class);
+                startActivity(intent);
+                break;
 
             default:
                 break;
@@ -97,14 +170,129 @@ public class Login extends Activity implements OnClickListener {
     }
 
 
+    @Override
+    public void onBackPressed() {
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setMessage("Are you sure you want to exit?")
+                .setCancelable(false)
+                .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int id) {
+                        Login.this.finish();
+                    }
+                })
+                .setNegativeButton("No", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int id) {
+                        dialog.cancel();
+                    }
+                });
+        AlertDialog alert = builder.create();
+        alert.show();
+    }
+
+
+    //Ayman 15/02/15 Facebook login methods
+    @Override
+    protected void onResume() {
+        super.onResume();
+        uihelper.onResume();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        uihelper.onSaveInstanceState(outState);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        uihelper.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        uihelper.onDestroy();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        uihelper.onActivityResult(requestCode, resultCode, data);
+    }
+
+    void showMsg(String string)
+    {
+        Toast.makeText(getApplicationContext(), string, Toast.LENGTH_SHORT).show();
+    }
+
+
+    private Session.StatusCallback callback =new Session.StatusCallback()
+    {
+
+        @Override
+        public void call(Session session, SessionState state, Exception exception)
+        {
+
+            onSessionStateChange(session,state,exception);
+        }
+    };
+
+
+    void onSessionStateChange(Session session, SessionState state, Exception exception)
+    {
+        if (state.isOpened())
+        {
+            Log.i("facebook", "Logged in...");
+            Request.newMeRequest(session, new Request.GraphUserCallback() {
+
+                @Override
+                public void onCompleted(GraphUser user, Response response) {
+
+                    if (user != null) {
+                        try {
+                            new_username = user.getName();
+                            new_email = user.getProperty("email").toString();
+                        } catch(Exception e){}
+
+                        //showMsg(usr);
+                        //this is the session object
+                        SharedPreferences sp = getSharedPreferences("SessionUser", 0);
+                        SharedPreferences.Editor speditor = sp.edit();
+                        speditor.putString("USERNAME", new_username);
+                        speditor.commit();
+                        Intent intent = new Intent(Login.this, Main.class);
+                        startActivity(intent);
+                        //Save to database if user is new
+                        new RegisterTask().execute();
+                        //showMsg(user.getProperty("email") + "");
+                        //showMsg(user.getProperty("gender") + "");
+                        //showMsg(user.getId() + "");
+                    } else {
+                        showMsg("its null");
+                        showMsg(response.getError().getErrorMessage());
+                    }
+                }
+            }).executeAsync();
+
+        }
+        else if (state.isClosed())
+        {
+            Log.i("facebook", "Logged out...");
+        }
+    }
+
+    //End Ayman
 
 
 
 
 
-    ///Inner class
 
-    class NetworkConnection extends AsyncTask<String, String, Void> {
+
+    ///LoginTask Inner class
+    class LoginTask extends AsyncTask<String, String, Void> {
 
         private ProgressDialog progressDialog = new ProgressDialog(Login.this);
         InputStream is = null ;
@@ -113,12 +301,12 @@ public class Login extends Activity implements OnClickListener {
 
 
         protected void onPreExecute() {
-            progressDialog.setMessage("Connecting to server...");
+            progressDialog.setMessage("Logging you in...");
             progressDialog.show();
             progressDialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
                 @Override
                 public void onCancel(DialogInterface arg0) {
-                    NetworkConnection.this.cancel(true);
+                    LoginTask.this.cancel(true);
                 }
             });
             //super.onPreExecute();
@@ -128,9 +316,8 @@ public class Login extends Activity implements OnClickListener {
 
         @Override
         protected Void doInBackground(String...params) {
-            ArrayList<NameValuePair> nvps;
-            HttpClient http_client = new DefaultHttpClient(); //form container
-            HttpPost http_post = new HttpPost("http://egarden-pl.byethost17.com/egardening/login/index.php");
+            http_client = new DefaultHttpClient(); //form container
+            http_post = new HttpPost("http://egarden-pl.byethost17.com/egardening/login/login.php");
 
             try {
 
@@ -139,18 +326,9 @@ public class Login extends Activity implements OnClickListener {
                 nvps.add(new BasicNameValuePair("password", password));
 
                 System.out.println(username+" "+password);
-
+                Thread.sleep(2000);
                 http_post.setEntity(new UrlEncodedFormEntity(nvps));
-                HttpResponse response = http_client.execute(http_post);
-
-                //if(response.getStatusLine().getStatusCode() == 200) {
-                    entity = response.getEntity();
-                    is = entity.getContent();
-
-                //}
-
-
-
+                response = http_client.execute(http_post);
 
 
             } catch (Exception e) {
@@ -165,34 +343,11 @@ public class Login extends Activity implements OnClickListener {
 
         protected void onPostExecute(Void result) {
 
-            //bind data in lisview or any other componet
-            //super.onPostExecute(result);
-            /*try {
-                JSONArray Jarray = new JSONArray(result);
-                for(int i=0;i<Jarray.length();i++)
-                {
-                    JSONObject Jasonobject = null;
 
-
-
-                    Jasonobject = Jarray.getJSONObject(i);
-
-                    //get an output on the screen
-                    String usr = Jasonobject.getString("username");
-                    String pwd = Jasonobject.getString("password");
-
-
-
-                }
-                this.progressDialog.dismiss();
-
-            } catch (Exception e) {
-                // TODO: handle exception
-                Log.e("log_tag", "Error parsing data "+e.toString());
-            }*/
             try {
-
-                    //is = entity.getContent();
+                    //Thread.sleep(4000);
+                    entity = response.getEntity();
+                    is = entity.getContent();
 
                     JSONObject json_response = new JSONObject(convertStreamToString(is));
                     String retrieved_usr = json_response.getString("username"); //the name of the field in the table in the DB
@@ -232,8 +387,6 @@ public class Login extends Activity implements OnClickListener {
             }
 
 
-
-
         }
 
 
@@ -264,6 +417,97 @@ public class Login extends Activity implements OnClickListener {
     }
 
 
+
+    //Ayman 16/02/15 RegisterTask Inner Class
+    class RegisterTask extends AsyncTask<String, String, Void> {
+
+        InputStream is = null ;
+        String result = "";
+
+        protected void onPreExecute() {
+            //super.onPreExecute();
+        }
+
+        @Override
+        protected Void doInBackground(String...params) {
+            addUser(new_username, new_password, new_email);
+            return null;
+        }
+
+        protected void onPostExecute(Void result) {
+
+        }
+
+
+        public void addUser(String username, String password ,String email) {
+
+            ArrayList<NameValuePair> nameValuePairs = new ArrayList<NameValuePair>();
+
+            nameValuePairs.add(new BasicNameValuePair("username",username));
+            nameValuePairs.add(new BasicNameValuePair("password",password));
+            nameValuePairs.add(new BasicNameValuePair("email",email));
+
+            try
+            {
+                HttpClient httpclient = new DefaultHttpClient();
+                HttpPost httppost = new HttpPost("http://egarden-pl.byethost17.com/egardening/login/register.php");
+                httppost.setEntity(new UrlEncodedFormEntity(nameValuePairs));
+                HttpResponse response = httpclient.execute(httppost);
+                HttpEntity entity = response.getEntity();
+                is = entity.getContent();
+                Log.e("pass 1", "connection success ");
+            }
+            catch(Exception e)
+            {
+                Log.e("Fail 1", e.toString());
+                Toast.makeText(getApplicationContext(), "Invalid IP Address",
+                        Toast.LENGTH_LONG).show();
+            }
+
+            try
+            {
+                BufferedReader reader = new BufferedReader
+                        (new InputStreamReader(is,"iso-8859-1"),8);
+                StringBuilder sb = new StringBuilder();
+                String line = null;
+
+                while ((line = reader.readLine()) != null)
+                {
+                    sb.append(line + "\n");
+                }
+                is.close();
+                result = sb.toString();
+                Log.e("pass 2", "connection success ");
+            }
+            catch(Exception e)
+            {
+                Log.e("Fail 2", e.toString());
+            }
+
+            try
+            {
+                JSONObject json_data = new JSONObject(result);
+                int code = (json_data.getInt("code"));
+
+                if(code==1)
+                {
+                    Toast.makeText(getBaseContext(), "Account created successfully",
+                            Toast.LENGTH_SHORT).show();
+                }
+                else
+                {
+                    Toast.makeText(getBaseContext(), "Sorry, Try Again",
+                            Toast.LENGTH_LONG).show();
+                }
+            }
+            catch(Exception e)
+            {
+                Log.e("Fail 3", e.toString());
+            }
+        }
+
+    }
+    //End Ayman
 
 
 }
